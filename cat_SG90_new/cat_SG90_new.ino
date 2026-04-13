@@ -23,6 +23,9 @@ int currentPos   = 500;
 int buzzerPin    = D8;      // Пин для наушника
 
 void setup() {
+  // — это инициализирует генератор случайных чисел шумом со свободного пина.
+  randomSeed(analogRead(0)); 
+
   myservo.attach(D4, MIN_MS, MAX_MS);
   myservo.writeMicroseconds(currentPos);
   delay(1000); // Даем время встать в начало
@@ -91,7 +94,63 @@ void birdChirp() {
 }
 
 
+/*
+Да! Все = ОК!  Хотелось внести в звуки элемент разнообразия 
+типа random по длительности и частотам
+Это отличная идея! Random сделает игрушку «живой», 
+и кот не сможет предугадать её поведение. 
+Если звуки будут каждый раз немного разными, 
+это не даст ему быстро привыкнуть к алгоритму.
+Чтобы это работало красиво, мы создадим функцию playRandomSound(), 
+которая будет выбирать один из типов звуков и каждый раз генерировать 
+его с новыми случайными параметрами.
+*/
+
+void playRandomSound() {
+  int soundType = random(0, 3); // Выбираем тип звука: 0, 1 или 2
+
+  if (soundType == 0) {
+    // Случайный мышиный писк
+    int count = random(2, 5); // От 2 до 4 писков
+    for (int i = 0; i < count; i++) {
+      unsigned int freq = random(5000, 9000); // Высокий писк
+      tone(buzzerPin, freq, random(30, 80)); 
+      delay(random(50, 150));
+    }
+  } 
+  else if (soundType == 1) {
+    // Случайная птичка (свип вниз)
+    unsigned int startF = random(6000, 9000);
+    unsigned int endF = startF - random(2000, 3000);
+    for (unsigned int f = startF; f > endF; f -= 150) {
+      tone(buzzerPin, f, 10);
+      delay(7);
+    }
+  } 
+  else {
+    // Случайное стрекотание
+    int clicks = random(5, 15);
+    for (int i = 0; i < clicks; i++) {
+      tone(buzzerPin, (unsigned int)random(3000, 5000), 10);
+      delay(random(20, 60));
+    }
+  }
+  noTone(buzzerPin);
+}
+
+
 void loop() {
+  
+  int clicks =100;
+  int i = 0;
+
+  for (int i = 0; i < clicks; i++) {
+     playRandomSound();
+     delay(random(500, 1600));
+    }
+
+
+
   birdChirp();
   delay(1000);
   cricketSound();
