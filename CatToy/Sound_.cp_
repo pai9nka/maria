@@ -1,0 +1,337 @@
+/*
+  ============================================================================
+   ФАЙЛ: Sound.cpp
+   НАЗНАЧЕНИЕ: Реализация звуковых эффектов
+  ============================================================================
+*/
+
+#include "Sound.h"
+#include "SharedState.h"
+
+// Внешние переменные (определены в CatToy.ino)
+extern RuntimeConfig gCfg;
+extern SemaphoreHandle_t gStateMutex;
+extern volatile bool systemReady;
+
+// ============================================================================
+// ИНИЦИАЛИЗАЦИЯ ЗВУКА
+// ============================================================================
+void initSound_() {
+    // ПОЛНОСТЬЮ ОТКЛЮЧАЕМ ДИНАМИК (пока не решим свист)
+    pinMode(SPEAKER_PIN, OUTPUT);
+    digitalWrite(SPEAKER_PIN, LOW);
+    // НЕ вызываем ledcAttach
+    Serial.println("Звуковой модуль ОТКЛЮЧЁН (для отладки)");
+}
+
+
+void initSound() {
+    // Настройка ШИМ для динамика на ESP32 (Core 3.x)
+    // ledcAttach(пин, частота, разрешение)
+    ledcAttach(SPEAKER_PIN, BUZZ_BASE_FREQ, BUZZ_RES_BITS);
+    ledcWriteTone(SPEAKER_PIN, 0);  // Выключено
+    Serial.println("Звуковой модуль инициализирован (LEDC)");
+}
+
+// ============================================================================
+// ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ — СЛУЧАЙНОЕ ЧИСЛО В ДИАПАЗОНЕ
+// ============================================================================
+
+/**
+ * @brief Генератор случайного числа в заданном диапазоне
+ * @param min Нижняя граница (включительно)
+ * @param max Верхняя граница (включительно)
+ * @return Случайное число между min и max
+ */
+static int randomRange(int min, int max) {
+    return min + random(max - min + 1);
+}
+
+// ============================================================================
+// БАЗОВЫЙ ПИСК (С УЧЁТОМ НАСТРОЕК ГРОМКОСТИ)
+// ============================================================================
+
+void beep_(uint16_t freq, uint16_t durMs) {
+    // Заглушка — звук не выводим
+    return;
+}
+
+void beep(uint16_t freq, uint16_t durMs) {
+    // 1. Безопасно копируем конфигурацию под мьютексом
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+
+    // 2. Если звук отключён — выходим
+    if (!cfg.soundEnabled) return;
+
+    // 3. Корректируем частоту в зависимости от уровня громкости
+    //    Тихий режим: понижаем частоту (менее резкий звук)
+    //    Громкий режим: повышаем частоту
+    uint16_t outFreq = freq;
+    if (cfg.soundLevel == 1) {
+        outFreq = max(200, freq * 70 / 100);   // тише и ниже
+    } else if (cfg.soundLevel >= 3) {
+        outFreq = min(8000, freq * 130 / 100); // громче и выше
+    }
+
+    // 4. Воспроизводим
+    ledcWriteTone(SPEAKER_PIN, outFreq);
+    vTaskDelay(pdMS_TO_TICKS(durMs));
+    ledcWriteTone(SPEAKER_PIN, 0);
+}
+
+// ============================================================================
+// ПЛАВНОЕ ИЗМЕНЕНИЕ ЧАСТОТЫ (СИРЕНА)
+// ============================================================================
+
+void beepSweep(int startFreq, int endFreq, int durMs, int steps) {
+    // Копируем конфигурацию
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+
+    if (!cfg.soundEnabled) return;
+
+    // Разбиваем длительность на шаги
+    int stepDur = durMs / steps;
+
+    for (int i = 0; i <= steps; i++) {
+        // Линейная интерполяция частоты между start и end
+        int freq = startFreq + (endFreq - startFreq) * i / steps;
+
+        // Коррекция громкости (как в beep)
+        if (cfg.soundLevel == 1) {
+            freq = max(200, freq * 70 / 100);
+        } else if (cfg.soundLevel >= 3) {
+            freq = min(8000, freq * 130 / 100);
+        }
+
+        ledcWriteTone(SPEAKER_PIN, freq);
+        vTaskDelay(pdMS_TO_TICKS(stepDur));
+    }
+
+    ledcWriteTone(SPEAKER_PIN, 0);
+}
+
+// ============================================================================
+// ТЕМАТИЧЕСКИЕ ЗВУКИ
+// ============================================================================
+
+void soundBirdOriginal() {
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+    if (!cfg.soundEnabled) return;  // <--- ДОБАВИТЬ
+
+    beep(2800, 80);
+    vTaskDelay(pdMS_TO_TICKS(30));
+    beep(3400, 90);
+}
+
+void soundBirdVariant(int v) {
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+    if (!cfg.soundEnabled) return;  // <--- ДОБАВИТЬ
+    
+    switch(v) {
+        case 0:
+            // Восходящая трель
+            beepSweep(1800, 3200, 200, 25);
+            vTaskDelay(pdMS_TO_TICKS(40));
+            beepSweep(3200, 2400, 150, 20);
+            break;
+        case 1:
+            // Короткий щебет
+            beep(2600, 50);
+            vTaskDelay(pdMS_TO_TICKS(25));
+            beep(3100, 45);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            beep(2800, 60);
+            break;
+        case 2:
+            // "Кукушка"
+            beep(1500, 120);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            beep(1300, 110);
+            break;
+        default:
+            soundBirdOriginal();
+    }
+}
+
+void soundTrill() {
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+    if (!cfg.soundEnabled) return;  // <--- ДОБАВИТЬ
+
+    int cnt = randomRange(3, 8);
+    for(int i = 0; i < cnt; i++) {
+        beep(randomRange(1200, 2800), randomRange(30, 80));
+        vTaskDelay(pdMS_TO_TICKS(randomRange(20, 60)));
+    }
+}
+
+void soundMouse() {
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+    if (!cfg.soundEnabled) return;  // <--- ДОБАВИТЬ
+    beep(1200, 50);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    beep(1000, 50);
+}
+
+void soundActivePlay() {
+    RuntimeConfig cfg;
+    xSemaphoreTake(gStateMutex, portMAX_DELAY);
+    cfg = gCfg;
+    xSemaphoreGive(gStateMutex);
+    if (!cfg.soundEnabled) return;  // <--- ДОБАВИТЬ
+
+    int r = random(100);
+    if(r < 40) {
+        soundBirdVariant(random(3));
+    } else if(r < 70) {
+        soundTrill();
+    } else {
+        beep(randomRange(1000, 3000), randomRange(50, 150));
+    }
+}
+
+void soundCalm() {
+    if(random(100) < 60) {
+        soundMouse();
+    } else {
+        beep(randomRange(800, 1500), randomRange(30, 70));
+    }
+}
+
+// ============================================================================
+// ЗАДАЧА ЗВУКА (запускается в отдельном потоке)
+// ============================================================================
+
+
+void taskSound(void* pv) {
+    // Ждём готовности системы
+    while(!systemReady) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
+    // Инициализация генератора случайных чисел
+    randomSeed(analogRead(0));
+    
+    // Переменные для отслеживания смены состояний
+    bool lastActivePlay = false;
+    bool lastCatDetected = false;
+    
+    for(;;) {
+        // Копируем текущее состояние под мьютексом
+        SharedState st;
+        xSemaphoreTake(gStateMutex, portMAX_DELAY);
+        st = gState;
+        xSemaphoreGive(gStateMutex);
+        
+        // ---------------------------------------------------------------
+        // РЕЖИМЫ, В КОТОРЫХ ЗВУК ОТКЛЮЧЁН ПОЛНОСТЬЮ
+        // ---------------------------------------------------------------
+        if(st.mode == MODE_CALIB || st.powerSave || !st.catDetected) {
+            // Гарантированно выключаем звук
+            ledcWriteTone(SPEAKER_PIN, 0);
+            // Обновляем последние состояния, чтобы не пропустить включение
+            lastActivePlay = false;
+            lastCatDetected = false;
+            // Пауза, чтобы не нагружать CPU
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        
+        // ---------------------------------------------------------------
+        // ЗВУК ТОЛЬКО ПРИ СМЕНЕ СОСТОЯНИЯ (чтобы не надоедать)
+        // ---------------------------------------------------------------
+        if(st.activePlay && !lastActivePlay) {
+            // Кот перешёл в активный режим -> весёлые звуки
+            soundActivePlay();
+            // Пауза после звука, чтобы не зациклить
+            vTaskDelay(pdMS_TO_TICKS(600));
+        } 
+        else if(st.catDetected && !lastCatDetected && !st.activePlay) {
+            // Кот появился, но не активен -> спокойные звуки
+            soundCalm();
+            // Пауза после звука
+            vTaskDelay(pdMS_TO_TICKS(600));
+        }
+        
+        // Запоминаем состояния для следующего цикла
+        lastActivePlay = st.activePlay;
+        lastCatDetected = st.catDetected;
+        
+        // ---------------------------------------------------------------
+        // ОСНОВНАЯ ПАУЗА МЕЖДУ ПРОВЕРКАМИ (2 секунды)
+        // ---------------------------------------------------------------
+        // Это гарантирует, что звуки не будут повторяться слишком часто
+        // даже если состояние меняется несколько раз подряд
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+void taskSound_(void* pv) {
+    // Ждём, пока система полностью инициализируется
+    while(!systemReady) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    // Инициализируем генератор случайных чисел
+    // Используем неподключённый аналоговый пин для энтропии
+    randomSeed(analogRead(0));
+
+    // Для отслеживания смены состояний (чтобы звук не повторялся бесконечно)
+    bool lastActivePlay = false;
+    bool lastCatDetected = false;
+
+    for(;;) {
+        // Копируем текущее состояние
+        SharedState st;
+        xSemaphoreTake(gStateMutex, portMAX_DELAY);
+        st = gState;
+        xSemaphoreGive(gStateMutex);
+
+        // В режиме калибровки или энергосбережения — молчим
+        if(st.mode == MODE_CALIB || st.powerSave) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+
+        // ЗВУК ТОЛЬКО ПРИ СМЕНЕ СОСТОЯНИЯ (чтобы не надоедать)
+        if(st.activePlay && !lastActivePlay) {
+            // Кот перешёл в активный режим
+            soundActivePlay();
+            vTaskDelay(pdMS_TO_TICKS(800));
+        }
+        else if(st.catDetected && !lastCatDetected && !st.activePlay) {
+            // Кот появился, но не активен
+            soundCalm();
+            vTaskDelay(pdMS_TO_TICKS(800));
+        }
+        else if(!st.catDetected && lastCatDetected) {
+            // Кот ушёл — грустный короткий писк
+            beep(800, 150);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+
+        // Запоминаем состояния для следующего цикла
+        lastActivePlay = st.activePlay;
+        lastCatDetected = st.catDetected;
+
+        // Пауза между проверками (не нагружаем процессор)
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
